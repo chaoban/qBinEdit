@@ -1,0 +1,33 @@
+qBinEdit - Third-Party Notices
+==============================
+
+qBinEdit uses the following third-party software. Each component remains under
+its own license; the full license texts are in the "licenses" folder.
+
+1. Qt 6 (Qt Core, Qt Gui, Qt Widgets and platform/style plugins)
+   Copyright (C) The Qt Company Ltd. and other contributors.
+   License: GNU Lesser General Public License v3 (licenses/LGPL-3.0.txt,
+            licenses/GPL-3.0.txt)
+   qBinEdit links to the Qt libraries dynamically (Qt6Core.dll, Qt6Gui.dll,
+   Qt6Widgets.dll and the plugins in "platforms" and "styles"). The Qt libraries
+   are unmodified builds of qtbase 6.8.3. You may replace these DLLs with your
+   own compatible build of Qt. The corresponding Qt source code is available at:
+     https://download.qt.io/archive/qt/6.8/6.8.3/submodules/qtbase-everywhere-src-6.8.3.tar.xz
+   On request, the author will also provide a copy of that source code.
+   Qt includes further third-party code (for example zlib, libpng, PCRE2,
+   HarfBuzz, double-conversion, md4c); see
+     https://doc.qt.io/qt-6/licenses-used-in-qt.html
+   and licenses/zlib.txt, licenses/libpng.txt, licenses/PCRE2-BSD-3-Clause.txt,
+   licenses/MIT.txt, licenses/BSD-3-Clause.txt.
+
+2. GCC runtime libraries (libgcc_s_seh-1.dll, libstdc++-6.dll) - only in builds
+   made with MinGW-w64
+   Copyright (C) Free Software Foundation, Inc.
+   License: GNU General Public License v3 with the GCC Runtime Library
+            Exception 3.1 (licenses/GPL-3.0.txt,
+            licenses/GCC-Runtime-Library-Exception-3.1.txt)
+
+3. MinGW-w64 winpthreads (libwinpthread-1.dll) - only in builds made with
+   MinGW-w64
+   Copyright (C) 2011-2016 mingw-w64 project, 2010 Lockless Inc.
+   License: MIT/expat and BSD-3-Clause (licenses/winpthreads.txt)

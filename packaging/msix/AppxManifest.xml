@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  qBinEdit MSIX manifest template.
+  build_msix.ps1 replaces the __TOKENS__ below. For a Microsoft Store submission the values MUST match
+  Partner Center > (your app) > Product management > Product identity:
+    __IDENTITY_NAME__           Package/Identity/Name           e.g. 12345SAISAIDev.qBinEdit
+    __PUBLISHER__               Package/Identity/Publisher      e.g. CN=1A2B3C4D-....
+    __PUBLISHER_DISPLAY_NAME__  Package/Properties/PublisherDisplayName
+    __VERSION__                 4-part version; the last part must be 0 for Store packages (e.g. 1.0.0.0)
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap3 desktop rescap">
+
+  <Identity
+    Name="__IDENTITY_NAME__"
+    Publisher="__PUBLISHER__"
+    Version="__VERSION__"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>qBinEdit</DisplayName>
+    <PublisherDisplayName>__PUBLISHER_DISPLAY_NAME__</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-US" />
+    <Resource Language="zh-TW" />
+  </Resources>
+
+  <Applications>
+    <Application Id="qBinEdit" Executable="qBinEdit.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="qBinEdit"
+        Description="Firmware binary viewer and editor"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile
+          Wide310x150Logo="Assets\Wide310x150Logo.png"
+          Square71x71Logo="Assets\SmallTile.png"
+          Square310x310Logo="Assets\LargeTile.png"
+          ShortName="qBinEdit">
+          <uap:ShowNameOnTiles>
+            <uap:ShowOn Tile="square150x150Logo" />
+            <uap:ShowOn Tile="wide310x150Logo" />
+          </uap:ShowNameOnTiles>
+        </uap:DefaultTile>
+        <uap:SplashScreen Image="Assets\SplashScreen.png" BackgroundColor="#1E3A8A" />
+      </uap:VisualElements>
+
+      <Extensions>
+        <!-- "Open with qBinEdit" for common firmware file types -->
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="firmware">
+            <uap:DisplayName>Firmware image</uap:DisplayName>
+            <uap:Logo>Assets\StoreLogo.png</uap:Logo>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.bin</uap:FileType>
+              <uap:FileType>.hex</uap:FileType>
+              <uap:FileType>.ihx</uap:FileType>
+              <uap:FileType>.s19</uap:FileType>
+              <uap:FileType>.s28</uap:FileType>
+              <uap:FileType>.s37</uap:FileType>
+              <uap:FileType>.srec</uap:FileType>
+              <uap:FileType>.mot</uap:FileType>
+              <uap:FileType>.rom</uap:FileType>
+              <uap:FileType>.fw</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <!-- lets "qbinedit file.bin" work from a command prompt -->
+        <uap3:Extension Category="windows.appExecutionAlias" Executable="qBinEdit.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap3:AppExecutionAlias>
+            <desktop:ExecutionAlias Alias="qbinedit.exe" />
+          </uap3:AppExecutionAlias>
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- Required for every packaged Win32 desktop app (restricted capability; justify it in Partner Center). -->
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

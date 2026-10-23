@@ -1,0 +1,27 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/icons">
+        <file alias="qbinedit.png">icons/qbinedit.png</file>
+    </qresource>
+    <qresource prefix="/brand">
+        <file alias="saisai_logo_light.png">brand/saisai_logo_light.png</file>
+        <file alias="saisai_logo_dark.png">brand/saisai_logo_dark.png</file>
+    </qresource>
+    <qresource prefix="/licenses">
+        <file alias="LICENSE.txt">../LICENSE.txt</file>
+        <file alias="THIRD-PARTY-NOTICES.txt">../THIRD-PARTY-NOTICES.txt</file>
+        <file alias="LGPL-3.0.txt">../licenses/LGPL-3.0.txt</file>
+        <file alias="GPL-3.0.txt">../licenses/GPL-3.0.txt</file>
+        <file alias="GCC-Runtime-Library-Exception-3.1.txt">../licenses/GCC-Runtime-Library-Exception-3.1.txt</file>
+        <file alias="winpthreads.txt">../licenses/winpthreads.txt</file>
+        <file alias="zlib.txt">../licenses/zlib.txt</file>
+        <file alias="libpng.txt">../licenses/libpng.txt</file>
+        <file alias="PCRE2-BSD-3-Clause.txt">../licenses/PCRE2-BSD-3-Clause.txt</file>
+        <file alias="MIT.txt">../licenses/MIT.txt</file>
+        <file alias="BSD-3-Clause.txt">../licenses/BSD-3-Clause.txt</file>
+    </qresource>
+    <qresource prefix="/i18n">
+        <file alias="qbinedit_zh_TW.qm">i18n/qbinedit_zh_TW.qm</file>
+        <file alias="qtbase_zh_TW.qm">i18n/qtbase_zh_TW.qm</file>
+    </qresource>
+</RCC>

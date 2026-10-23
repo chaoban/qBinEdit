@@ -1,0 +1,17 @@
+# build output
+build*/
+dist/
+
+# MSIX test-signing material - never commit private keys
+*.pfx
+*.cer
+*.msix
+*.msixupload
+wack-report.xml
+
+# local / tool files
+Claude outputs/
+*.user
+.vs/
+.vscode/
+CMakeUserPresets.json

@@ -1,0 +1,7 @@
+{
+  "_comment": "Copy these values from Partner Center > qBinEdit > Product management > Product identity before building the Store package.",
+  "IdentityName": "SAISAI.Dev.qBinEdit",
+  "Publisher": "CN=8EE2A838-6C91-4290-8711-F41153FB93C1",
+  "PublisherDisplayName": "SAISAI.Dev",
+  "Version": "1.0.0.0"
+}
