@@ -7,6 +7,9 @@
 #include <QSaveFile>
 #include <QUndoCommand>
 #include <QUndoStack>
+#include <algorithm>
+#include <cstring>
+#include <utility>
 
 namespace {
 
@@ -24,12 +27,14 @@ public:
 
     void redo() override
     {
+        m_before = m_doc->changeState();
         m_doc->rawReplace(m_pos, m_old.size(), m_new);
         m_doc->notifyCursorHint(m_pos + m_new.size());
     }
     void undo() override
     {
         m_doc->rawReplace(m_pos, m_new.size(), m_old);
+        m_doc->restoreChangeState(m_before);
         m_doc->notifyCursorHint(m_pos);
     }
 
@@ -68,6 +73,46 @@ private:
     QByteArray m_old;
     QByteArray m_new;
     bool m_mergeable;
+    Document::ChangeState m_before;     // change highlighting before redo(), restored by undo()
+};
+
+// Replace All as one undo step: same-length replacements patch in place, others run in a
+// single pass, instead of one buffer move + repaint per occurrence.
+class MultiReplaceCommand : public QUndoCommand
+{
+public:
+    MultiReplaceCommand(Document *doc, const QVector<qint64> &positions, qint64 len, const QByteArray &oldBytes,
+                        const QByteArray &oldMask, const QByteArray &newBytes, const QString &text)
+        : QUndoCommand(text), m_doc(doc), m_pos(positions), m_len(len), m_old(oldBytes), m_oldMask(oldMask),
+          m_new(newBytes)
+    {
+    }
+
+    void redo() override
+    {
+        m_before = m_doc->changeState();
+        m_doc->rawReplaceMany(m_pos, m_len, m_new, false, QByteArray());
+        m_doc->notifyCursorHint(m_pos.first());
+    }
+    void undo() override
+    {
+        const qint64 delta = m_new.size() - m_len;
+        QVector<qint64> cur(m_pos.size());
+        for (int i = 0; i < m_pos.size(); ++i)
+            cur[i] = m_pos[i] + qint64(i) * delta;
+        m_doc->rawReplaceMany(cur, m_new.size(), m_old, true, m_oldMask);
+        m_doc->restoreChangeState(m_before);
+        m_doc->notifyCursorHint(m_pos.first());
+    }
+
+private:
+    Document *m_doc;
+    QVector<qint64> m_pos;      // positions before the replacement, ascending
+    qint64 m_len;
+    QByteArray m_old;           // replaced bytes, m_len per position
+    QByteArray m_oldMask;       // their gap-mask values (empty if the document has no gaps)
+    QByteArray m_new;
+    Document::ChangeState m_before;
 };
 
 } // namespace
@@ -128,6 +173,7 @@ bool Document::load(const QString &path, int forceFormat, QString *error, QStrin
     m_name.clear();
     m_format = fmt;
     m_info = pr;
+    resetChanges();
     m_undo->clear();
     m_undo->setClean();
     emit contentsChanged(0, 0, m_data.size());
@@ -170,6 +216,7 @@ bool Document::save(const QString &path, FileFormat format, QString *error)
     m_name.clear();
     m_format = format;
     m_original = m_data;
+    resetChanges();
     m_undo->setClean();
     emit filePathChanged();
     emit contentsChanged(0, m_data.size(), m_data.size());   // refresh change highlighting
@@ -186,6 +233,7 @@ void Document::setContent(const QByteArray &data, quint64 baseAddress, const QSt
     m_path.clear();
     m_format = FileFormat::Binary;
     m_info = Formats::ParseResult();
+    resetChanges();
     m_undo->clear();
     emit contentsChanged(0, 0, m_data.size());
     emit filePathChanged();
@@ -224,8 +272,85 @@ bool Document::isModified() const
 
 bool Document::isChangedByte(qint64 pos) const
 {
-    return m_original.size() == m_data.size() && pos >= 0 && pos < m_data.size()
-           && m_original.at(pos) != m_data.at(pos);
+    if (pos < 0 || pos >= m_data.size())
+        return false;
+    if (!m_changes.shifted && m_original.size() == m_data.size())
+        return m_original.at(pos) != m_data.at(pos);     // exact: offsets still match the file
+    const auto &r = m_changes.ranges;
+    auto it = std::upper_bound(r.cbegin(), r.cend(), pos,
+                               [](qint64 p, const QPair<qint64, qint64> &x) { return p < x.first; });
+    return it != r.cbegin() && pos < (it - 1)->second;
+}
+
+void Document::resetChanges()
+{
+    m_changes.ranges.clear();
+    m_changes.shifted = false;
+    ++m_changes.epoch;
+}
+
+void Document::restoreChangeState(const ChangeState &s)
+{
+    // A snapshot from before the last load/save refers to another baseline: keep the
+    // tracked state, which already marks the undone bytes as different from the saved file.
+    if (s.epoch == m_changes.epoch)
+        m_changes = s;
+}
+
+void Document::trackEdits(const QVector<qint64> &positions, qint64 removed, qint64 added)
+{
+    const int n = int(positions.size());
+    if (n == 0)
+        return;
+    const qint64 d = added - removed;           // shift contributed by each edit
+    if (d != 0)
+        m_changes.shifted = true;
+
+    // 1) previously edited ranges, cut where they were overwritten/removed and shifted
+    QVector<QPair<qint64, qint64>> kept;
+    kept.reserve(m_changes.ranges.size());
+    int first = 0;      // first edit that ends after the current range start
+    for (const auto &r : std::as_const(m_changes.ranges)) {
+        while (first < n && positions[first] + removed <= r.first)
+            ++first;
+        qint64 cur = r.first;
+        int k = first;
+        while (cur < r.second) {
+            if (k < n && positions[k] < r.second) {
+                if (cur < positions[k])
+                    kept.append({ cur + qint64(k) * d, positions[k] + qint64(k) * d });
+                cur = qMax(cur, positions[k] + removed);
+                ++k;
+            } else {
+                kept.append({ cur + qint64(k) * d, r.second + qint64(k) * d });
+                cur = r.second;
+            }
+        }
+    }
+
+    // 2) merge with the newly written bytes; both streams are sorted
+    QVector<QPair<qint64, qint64>> merged;
+    merged.reserve(kept.size() + (added > 0 ? qMin(n, 1024) : 0));
+    auto push = [&merged](qint64 a, qint64 b) {
+        if (b <= a)
+            return;
+        if (!merged.isEmpty() && a <= merged.last().second)
+            merged.last().second = qMax(merged.last().second, b);
+        else
+            merged.append({ a, b });
+    };
+    int i = 0, k = 0;
+    while (i < kept.size() || (added > 0 && k < n)) {
+        const qint64 editStart = (added > 0 && k < n) ? positions[k] + qint64(k) * d : -1;
+        if (i < kept.size() && (editStart < 0 || kept[i].first <= editStart)) {
+            push(kept[i].first, kept[i].second);
+            ++i;
+        } else {
+            push(editStart, editStart + added);
+            ++k;
+        }
+    }
+    m_changes.ranges = merged;
 }
 
 bool Document::isGap(qint64 pos) const
@@ -245,11 +370,102 @@ void Document::replace(qint64 pos, qint64 len, const QByteArray &bytes, const QS
     m_undo->push(new ReplaceCommand(this, pos, old, bytes, text, mergeable));
 }
 
+int Document::replaceAll(const QVector<qint64> &positions, qint64 len, const QByteArray &bytes, const QString &text)
+{
+    if (m_readOnly || len <= 0)
+        return 0;
+    const bool hasMask = !m_gapMask.isEmpty();
+    QVector<qint64> pos;
+    QByteArray old, oldMask;
+    qint64 next = 0;
+    for (qint64 p : positions) {
+        if (p < next || p + len > m_data.size())
+            continue;                   // overlapping or out of range: skip
+        next = p + len;
+        if (len == bytes.size() && std::memcmp(m_data.constData() + p, bytes.constData(), size_t(len)) == 0)
+            continue;                   // already equal
+        pos.append(p);
+        old.append(m_data.constData() + p, len);
+        if (hasMask)
+            oldMask.append(m_gapMask.constData() + p, len);
+    }
+    if (pos.isEmpty())
+        return 0;
+    m_undo->push(new MultiReplaceCommand(this, pos, len, old, oldMask, bytes, text));
+    return int(pos.size());
+}
+
 void Document::rawReplace(qint64 pos, qint64 len, const QByteArray &bytes)
 {
     m_data.replace(pos, len, bytes);
     // Overwrites keep the gap mask (a gap byte only counts as gap while it equals the fill byte).
     if (!m_gapMask.isEmpty() && len != bytes.size())
         m_gapMask.replace(pos, len, QByteArray(bytes.size(), char(0)));
+    trackEdits({ pos }, len, bytes.size());
     emit contentsChanged(pos, len, bytes.size());
+}
+
+void Document::rawReplaceMany(const QVector<qint64> &positions, qint64 removed, const QByteArray &bytes,
+                              bool perPosition, const QByteArray &maskBytes)
+{
+    const int n = int(positions.size());
+    if (n == 0)
+        return;
+    const qint64 added = perPosition ? bytes.size() / n : bytes.size();
+    auto chunk = [&](int i) { return bytes.constData() + (perPosition ? qint64(i) * added : 0); };
+    auto maskChunk = [&](int i) { return maskBytes.constData() + (perPosition ? qint64(i) * added : 0); };
+    const bool hasMask = !m_gapMask.isEmpty();
+    const bool restoreMask = hasMask && maskBytes.size() == bytes.size();
+    const qint64 oldSize = m_data.size();
+    const qint64 newSize = oldSize + qint64(n) * (added - removed);
+
+    // Apply the same edit list to the data and (if present) the gap mask, in place.
+    auto apply = [&](QByteArray &buf, bool isMask) {
+        auto put = [&](char *dst, int i) {
+            if (!isMask)
+                std::memcpy(dst, chunk(i), size_t(added));
+            else if (restoreMask)
+                std::memcpy(dst, maskChunk(i), size_t(added));
+            else
+                std::memset(dst, 0, size_t(added));
+        };
+        if (added == removed) {
+            if (isMask && !restoreMask)
+                return;                 // overwrites keep the gap mask
+            char *d = buf.data();
+            for (int i = 0; i < n; ++i)
+                put(d + positions[i], i);
+        } else if (added < removed) {   // shrink: compact towards the front
+            char *d = buf.data();
+            qint64 dst = positions[0];
+            for (int i = 0; i < n; ++i) {
+                put(d + dst, i);
+                dst += added;
+                const qint64 src = positions[i] + removed;
+                const qint64 end = (i + 1 < n) ? positions[i + 1] : oldSize;
+                std::memmove(d + dst, d + src, size_t(end - src));
+                dst += end - src;
+            }
+            buf.resize(newSize);
+        } else {                        // grow: resize, then move from the back
+            buf.resize(newSize);
+            char *d = buf.data();
+            qint64 src = oldSize, dst = newSize;
+            for (int i = n - 1; i >= 0; --i) {
+                const qint64 segStart = positions[i] + removed;
+                dst -= src - segStart;
+                std::memmove(d + dst, d + segStart, size_t(src - segStart));
+                dst -= added;
+                put(d + dst, i);
+                src = positions[i];
+            }
+        }
+    };
+    apply(m_data, false);
+    if (hasMask)
+        apply(m_gapMask, true);
+
+    trackEdits(positions, removed, added);
+    const qint64 from = positions[0];
+    emit contentsChanged(from, oldSize - from, newSize - from);
 }

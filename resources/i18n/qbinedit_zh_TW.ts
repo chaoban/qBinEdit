@@ -1250,5 +1250,17 @@ Do you want to save your changes?</source>
         <source>Edit</source>
         <translation>編輯</translation>
     </message>
+    <message>
+        <source>Recent Files</source>
+        <translation>最近開啟的檔案</translation>
+    </message>
+    <message>
+        <source>%1
+
+This file no longer exists. Remove it from the list?</source>
+        <translation>%1
+
+這個檔案已不存在。要從清單中移除嗎？</translation>
+    </message>
 </context>
 </TS>

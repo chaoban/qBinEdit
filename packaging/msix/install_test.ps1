@@ -10,7 +10,7 @@
 
 .EXAMPLE
     # Administrator PowerShell
-    powershell -ExecutionPolicy Bypass -File install_test.ps1 -Msix ..\..\dist\qBinEdit_1.0.0.0_x64.msix -Cert ..\..\dist\qBinEdit_TestCert.cer
+    powershell -ExecutionPolicy Bypass -File install_test.ps1 -Msix ..\..\dist\qBinEdit_1.0.1.0_x64.msix -Cert ..\..\dist\qBinEdit_TestCert.cer
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File install_test.ps1 -Mode Register
 #>

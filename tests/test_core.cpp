@@ -1,8 +1,11 @@
 // qBinEdit - console unit tests for checksums and firmware formats
 #include "checksums.h"
 #include "formats.h"
+#include "search.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QRandomGenerator>
 #include <cstdio>
 
 static int g_fail = 0;
@@ -121,10 +124,136 @@ static void testDetect()
     CHECK(Formats::detect("a.bin", "hello world") == FileFormat::Binary, "detect text as binary");
 }
 
+// slicing-by-8 CRC against the bit-by-bit reference, with random block splits
+static void testCrcSlicing()
+{
+    QRandomGenerator rng(12345);
+    bool allOk = true;
+    for (const auto &spec : Checksums::crcCatalog()) {
+        for (int round = 0; round < 40; ++round) {
+            QByteArray buf(int(rng.bounded(0, 600)), Qt::Uninitialized);
+            for (char &c : buf)
+                c = char(rng.bounded(256));
+            const auto *d = reinterpret_cast<const uchar *>(buf.constData());
+            const quint32 ref = Checksums::crcBitwise(spec, d, buf.size());
+            Checksums::Crc crc(spec);
+            qint64 off = 0;
+            while (off < buf.size()) {
+                const qint64 n = qMin<qint64>(buf.size() - off, rng.bounded(1, 40));
+                crc.update(d + off, n);
+                off += n;
+            }
+            if (crc.value() != ref || Checksums::crcCompute(spec, d, buf.size()) != ref) {
+                std::printf("  mismatch %s len %d\n", spec.name, int(buf.size()));
+                allOk = false;
+            }
+        }
+    }
+    CHECK(allOk, "CRC slicing-by-8 == bitwise reference (random data, random blocks)");
+}
+
+// multi-threaded computeAll on an odd-sized buffer against independent calculations
+static void testComputeAllLarge()
+{
+    QByteArray buf(5 * 1024 * 1024 + 3, Qt::Uninitialized);
+    QRandomGenerator rng(777);
+    for (char &c : buf)
+        c = char(rng.bounded(256));
+    const auto *d = reinterpret_cast<const uchar *>(buf.constData());
+    const qint64 n = buf.size();
+    std::atomic<qint64> progress{ 0 };
+    const auto all = Checksums::computeAll(d, n, nullptr, &progress);
+    auto value = [&](const char *name) {
+        for (const auto &r : all)
+            if (r.name == QLatin1String(name))
+                return r.value;
+        return QString();
+    };
+    CHECK(progress.load() == n, "computeAll reports full progress");
+
+    quint64 sum = 0;
+    quint8 x = 0;
+    quint32 le = 0, be = 0;
+    for (qint64 i = 0; i < n; ++i) {
+        sum += d[i];
+        x ^= d[i];
+    }
+    for (qint64 i = 0; i + 1 < n; i += 2) {
+        le += quint32(d[i]) | (quint32(d[i + 1]) << 8);
+        be += (quint32(d[i]) << 8) | quint32(d[i + 1]);
+    }
+    le += d[n - 1];
+    be += quint32(d[n - 1]) << 8;
+    auto hx = [](quint64 v, int digits) {
+        return QStringLiteral("0x") + QString::number(v, 16).toUpper().rightJustified(digits, QLatin1Char('0'));
+    };
+    CHECK(value("Sum-32") == hx(sum & 0xFFFFFFFFu, 8), "large: Sum-32");
+    CHECK(value("XOR-8") == hx(x, 2), "large: XOR-8");
+    CHECK(value("Word Sum-16 (LE)") == hx(le & 0xFFFF, 4) && value("Word Sum-16 (BE)") == hx(be & 0xFFFF, 4),
+          "large: word sums with odd tail");
+    bool crcOk = true;
+    for (const auto &spec : Checksums::crcCatalog())
+        crcOk = crcOk && value(spec.name) == hx(Checksums::crcBitwise(spec, d, n), spec.width / 4);
+    CHECK(crcOk, "large: all CRCs");
+    CHECK(value("SHA-256") == QString::fromLatin1(QCryptographicHash::hash(buf, QCryptographicHash::Sha256).toHex()).toUpper(),
+          "large: SHA-256");
+    CHECK(value("MD5") == QString::fromLatin1(QCryptographicHash::hash(buf, QCryptographicHash::Md5).toHex()).toUpper(),
+          "large: MD5");
+
+    std::atomic<bool> cancel{ true };
+    CHECK(Checksums::computeAll(d, n, &cancel, nullptr).isEmpty(), "computeAll can be cancelled");
+}
+
+static qint64 naiveIndex(const QByteArray &h, const QByteArray &p, qint64 from)
+{
+    return h.toLower().indexOf(p.toLower(), from);
+}
+
+static void testSearch()
+{
+    QRandomGenerator rng(4242);
+    const char alphabet[] = "aAbB\x00\xFF\xC1\xE1Zz";     // letters, non-letters and Latin-1 look-alikes
+    bool fwd = true, back = true, all = true, cs = true;
+    for (int round = 0; round < 300; ++round) {
+        QByteArray h(int(rng.bounded(0, 200)), Qt::Uninitialized);
+        for (char &c : h)
+            c = alphabet[rng.bounded(int(sizeof(alphabet) - 1))];
+        QByteArray p(int(rng.bounded(1, 5)), Qt::Uninitialized);
+        for (char &c : p)
+            c = alphabet[rng.bounded(int(sizeof(alphabet) - 1))];
+        const qint64 from = rng.bounded(0, int(h.size()) + 2);
+        if (Search::indexOf(h, p, from, false) != naiveIndex(h, p, from))
+            fwd = false;
+        if (Search::indexOf(h, p, from, true) != h.indexOf(p, from))
+            cs = false;
+        const qint64 bfrom = qint64(rng.bounded(0, int(h.size()) + 1)) - 1;
+        const qint64 expBack = bfrom < 0 ? h.toLower().lastIndexOf(p.toLower())
+                                         : (bfrom > h.size() - p.size() ? h.toLower().lastIndexOf(p.toLower())
+                                                                         : h.toLower().lastIndexOf(p.toLower(), bfrom));
+        if (Search::lastIndexOf(h, p, bfrom, false) != expBack)
+            back = false;
+        QVector<qint64> exp;
+        const QByteArray hl = h.toLower(), pl = p.toLower();
+        for (qint64 q = hl.indexOf(pl); q >= 0; q = hl.indexOf(pl, q + pl.size()))
+            exp.append(q);
+        if (Search::findAll(h, p, false) != exp || Search::count(h, p, false) != exp.size())
+            all = false;
+    }
+    CHECK(fwd, "case-insensitive indexOf == lower-case copy search");
+    CHECK(back, "case-insensitive lastIndexOf == lower-case copy search");
+    CHECK(all, "case-insensitive findAll / count");
+    CHECK(cs, "case-sensitive indexOf");
+    CHECK(Search::indexOf(QByteArray("\xC1"), QByteArray("\xE1"), 0, false) == -1, "non-ASCII bytes are not case-folded");
+    CHECK(Search::indexOf(QByteArray("xxHeLLo"), QByteArray("hello"), 0, false) == 2, "mixed case match");
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
     testCrc();
+    testCrcSlicing();
+    testComputeAllLarge();
+    testSearch();
     testIntelHex();
     testSRecord();
     testDetect();

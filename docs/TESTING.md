@@ -15,7 +15,7 @@
 ## A. 可攜版（ZIP）
 
 ### 安裝 / 執行
-1. 將 `dist\qBinEdit-1.0.0-win64-portable.zip` 解壓縮到任意位置（例如 `D:\Tools\qBinEdit`，或隨身碟）。
+1. 將 `dist\qBinEdit-1.0.1-win64-portable.zip` 解壓縮到任意位置（例如 `D:\Tools\qBinEdit`，或隨身碟）。
 2. 執行 `qBinEdit.exe`。
 3. 若出現 SmartScreen「Windows 已保護您的電腦」：點「其他資訊」→「仍要執行」（未做程式碼簽章時的正常現象）。
    - 從網路或 OneDrive 下載的 ZIP 可先在檔案內容勾「解除封鎖」再解壓縮，可避免每個 DLL 都被標記。
@@ -43,7 +43,7 @@ Remove-Item "HKCU:\Software\qBinEdit" -Recurse -Force -ErrorAction SilentlyConti
    cd <repo>\packaging\msix
    powershell -ExecutionPolicy Bypass -File .\build_msix.ps1 -AppDir ..\..\dist\qBinEdit
    ```
-   輸出：`dist\qBinEdit_1.0.0.0_x64.msix` 與 `dist\msix-layout\`（展開後的套件內容）。
+   輸出：`dist\qBinEdit_1.0.1.0_x64.msix` 與 `dist\msix-layout\`（展開後的套件內容）。
 
 ---
 
@@ -77,7 +77,7 @@ powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
 2. 以**系統管理員身分**開啟 PowerShell，安裝（會把測試憑證加入「本機電腦\受信任的人」）：
    ```powershell
    cd <repo>\packaging\msix
-   powershell -ExecutionPolicy Bypass -File .\install_test.ps1 -Msix ..\..\dist\qBinEdit_1.0.0.0_x64.msix -Cert ..\..\dist\qBinEdit_TestCert.cer
+   powershell -ExecutionPolicy Bypass -File .\install_test.ps1 -Msix ..\..\dist\qBinEdit_1.0.1.0_x64.msix -Cert ..\..\dist\qBinEdit_TestCert.cer
    ```
    也可以直接在檔案總管雙擊 `.msix`，用「應用程式安裝程式」安裝（憑證須先信任）。
 
@@ -102,7 +102,7 @@ Get-ChildItem Cert:\LocalMachine\TrustedPeople | ? Subject -like "*SAISAIDev*"  
 以系統管理員身分：
 ```powershell
 cd <repo>\packaging\msix
-powershell -ExecutionPolicy Bypass -File .\run_wack.ps1 -Msix ..\..\dist\qBinEdit_1.0.0.0_x64.msix
+powershell -ExecutionPolicy Bypass -File .\run_wack.ps1 -Msix ..\..\dist\qBinEdit_1.0.1.0_x64.msix
 ```
 報告：`dist\wack-report.xml`，`OVERALL_RESULT="PASS"` 即可送審。
 
@@ -124,6 +124,12 @@ powershell -ExecutionPolicy Bypass -File .\run_wack.ps1 -Msix ..\..\dist\qBinEdi
 | 8 | Ctrl+F 搜尋 `HY17P3030`（ASCII 文字） | 選取到偏移 0x804 |
 | 9 | 另存新檔為 `.hex`，再開啟 | 內容與位址一致 |
 | 10 | 關閉時有未儲存修改 | 詢問是否儲存 |
+| 11 | （1.0.1）Ctrl+E，在偏移 0x10 輸入 `AB`，再把游標移到 0、按 Insert 插入 4 個 `FF` | 插入的 4 個位元組與移到 0x14 的 `AB` 都是紅字；Ctrl+Z 一次後只剩 0x10 的 `AB` 是紅字 |
+| 12 | （1.0.1）Ctrl+H，十六進位搜尋 `FF`、取代為 `00 00`，按「全部取代」並確認大小改變 | 立即完成；復原清單只多一步，Ctrl+Z 一次全部還原 |
+| 13 | （1.0.1）`fsutil file createnew big.bin 268435456` 建 256 MiB 檔，開啟後按 Ctrl+K | 視窗可正常操作、出現進度列；計算中切換範圍或關閉對話框都不會卡住 |
+| 14 | （1.0.1）開啟 `demo_fw.bin` 後，在「開啟」對話框輸入 `DEMO_FW.BIN` 再開一次 | 切到原本的分頁，不會開第二個 |
+| 15 | （1.0.1）把某個最近開啟的檔案改名，再從「最近開啟的檔案」點它 | 詢問是否從清單移除，選「是」後清單更新 |
+| 16 | （1.0.1）在大檔 Ctrl+A，編輯 → 複製為 → 二進位文字 | 超過 32 MiB 時提示上限；32 MiB 以內約 1 秒內完成 |
 
 ---
 

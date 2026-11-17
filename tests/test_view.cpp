@@ -1,9 +1,14 @@
 // qBinEdit - widget-level tests for HexView editing (run with QT_QPA_PLATFORM=offscreen)
+#include "dialogs.h"
 #include "document.h"
 #include "hexview.h"
 
 #include <QApplication>
+#include <QDir>
+#include <QFile>
 #include <QKeyEvent>
+#include <QRandomGenerator>
+#include <QTemporaryDir>
 #include <QUndoStack>
 #include <cstdio>
 
@@ -116,6 +121,169 @@ int main(int argc, char **argv)
         doc.undoStack()->undo();
     CHECK(doc.data() == QByteArray::fromHex("00112233445566778899AABBCCDDEEFF"), "undo all restores original");
     CHECK(!doc.isModified(), "clean after undo all");
+
+    // ---- change highlighting survives inserts / deletes
+    {
+        Document d;
+        d.setContent(QByteArray::fromHex("00112233445566778899"), 0, QStringLiteral("c"));
+        d.setReadOnly(false);
+        d.replace(2, 1, QByteArray(1, char(0xAA)), QStringLiteral("ow"));
+        CHECK(d.isChangedByte(2) && !d.isChangedByte(3), "overwrite highlighted");
+        d.replace(0, 0, QByteArray(3, char(0xEE)), QStringLiteral("ins"));
+        CHECK(d.isChangedByte(0) && d.isChangedByte(2) && !d.isChangedByte(3), "inserted bytes highlighted");
+        CHECK(d.isChangedByte(5) && !d.isChangedByte(4) && !d.isChangedByte(6), "earlier overwrite still highlighted after insert");
+        d.replace(7, 2, QByteArray(), QStringLiteral("del"));
+        CHECK(d.isChangedByte(5) && !d.isChangedByte(7), "delete keeps other highlights");
+        d.undoStack()->undo();
+        d.undoStack()->undo();
+        CHECK(d.isChangedByte(2) && !d.isChangedByte(0) && !d.isChangedByte(5), "undo insert restores highlighting");
+        d.undoStack()->undo();
+        bool none = true;
+        for (qint64 i = 0; i < d.size(); ++i)
+            none = none && !d.isChangedByte(i);
+        CHECK(none, "undo all: nothing highlighted");
+        d.undoStack()->redo();
+        d.undoStack()->redo();
+        CHECK(d.isChangedByte(5) && d.isChangedByte(0), "redo restores highlighting");
+    }
+
+    // ---- change tracking against a byte-by-byte model (random edits, undo, redo)
+    {
+        QRandomGenerator rng(2024);
+        bool ok = true;
+        for (int round = 0; round < 40 && ok; ++round) {
+            Document d;
+            d.setContent(QByteArray(int(rng.bounded(20, 80)), char(0x55)), 0, QStringLiteral("m"));
+            d.setReadOnly(false);
+            struct State { QByteArray data; QVector<bool> marks; };
+            QVector<State> undo, redo;
+            State cur{ d.data(), QVector<bool>(d.size(), false) };
+            auto apply = [&](const QVector<qint64> &pos, qint64 rem, const QByteArray &ins) {
+                // model: same edit, inserted bytes marked
+                State n = cur;
+                for (int i = pos.size() - 1; i >= 0; --i) {
+                    n.data.replace(pos[i], rem, ins);
+                    n.marks.remove(pos[i], rem);
+                    for (int k = 0; k < ins.size(); ++k)
+                        n.marks.insert(pos[i], true);
+                }
+                undo.append(cur);
+                redo.clear();
+                cur = n;
+            };
+            // start with an insert so offsets are shifted and ranges are what the view uses
+            d.replace(0, 0, QByteArray(1, char(0x01)), QStringLiteral("i"));
+            apply({ 0 }, 0, QByteArray(1, char(0x01)));
+            undo.clear();
+            for (int step = 0; step < 25 && ok; ++step) {
+                const int op = int(rng.bounded(5));
+                const qint64 size = d.size();
+                if (op == 3 && !undo.isEmpty()) {
+                    d.undoStack()->undo();
+                    redo.append(cur);
+                    cur = undo.takeLast();
+                } else if (op == 4 && !redo.isEmpty()) {
+                    d.undoStack()->redo();
+                    undo.append(cur);
+                    cur = redo.takeLast();
+                } else if (op == 2 && size > 8) {
+                    const qint64 rem = rng.bounded(1, 3);
+                    const QByteArray ins(int(rng.bounded(0, 4)), char(0xA0 + step));
+                    QVector<qint64> pos;
+                    for (qint64 p = rng.bounded(0, 4); p + rem <= size; p += rem + rng.bounded(0, 9))
+                        pos.append(p);
+                    if (pos.isEmpty())
+                        continue;
+                    if (d.replaceAll(pos, rem, ins, QStringLiteral("all")) > 0)
+                        apply(pos, rem, ins);
+                } else {
+                    const qint64 p = rng.bounded(0, int(size) + 1);
+                    const qint64 rem = qMin<qint64>(rng.bounded(0, 4), size - p);
+                    const QByteArray ins(int(rng.bounded(rem == 0 ? 1 : 0, 4)), char(0x10 + step));
+                    if (d.data().mid(p, rem) == ins)
+                        continue;
+                    d.replace(p, rem, ins, QStringLiteral("r"));
+                    apply({ p }, rem, ins);
+                }
+                ok = d.data() == cur.data;
+                if (ok && d.changeState().shifted)
+                    for (qint64 i = 0; i < d.size() && ok; ++i)
+                        ok = d.isChangedByte(i) == cur.marks[i];
+                if (!ok)
+                    std::printf("  model mismatch round %d step %d op %d\n", round, step, op);
+            }
+        }
+        CHECK(ok, "change tracking matches byte model through edits, undo and redo");
+    }
+
+    // ---- Replace All: one undo step, in-place and size-changing, exact undo
+    {
+        QRandomGenerator rng(99);
+        bool ok = true;
+        for (int round = 0; round < 60 && ok; ++round) {
+            QByteArray base(int(rng.bounded(1, 300)), Qt::Uninitialized);
+            for (char &c : base)
+                c = "AB\x01"[rng.bounded(3)];
+            const QByteArray pat = round % 2 ? QByteArray("AB") : QByteArray("A");
+            const QByteArray repl = QByteArray("XYZ").left(int(rng.bounded(0, 4)));
+            Document d;
+            d.setContent(base, 0, QStringLiteral("r"));
+            d.setReadOnly(false);
+            QVector<qint64> hits;
+            for (qint64 p = base.indexOf(pat); p >= 0; p = base.indexOf(pat, p + pat.size()))
+                hits.append(p);
+            QByteArray expect = base;
+            for (int i = hits.size() - 1; i >= 0; --i)
+                expect.replace(hits[i], pat.size(), repl);
+            const int before = d.undoStack()->count();
+            d.replaceAll(hits, pat.size(), repl, QStringLiteral("all"));
+            ok = ok && d.data() == expect && d.undoStack()->count() == before + (hits.isEmpty() ? 0 : 1);
+            if (!hits.isEmpty())
+                d.undoStack()->undo();
+            ok = ok && d.data() == base;
+        }
+        CHECK(ok, "replaceAll == sequential replace; single undo restores (random)");
+    }
+
+    // ---- Replace All on an Intel HEX image keeps the gap mask on undo; save resets highlights
+    {
+        QTemporaryDir tmp;
+        const QString hexPath = QDir(tmp.path()).filePath(QStringLiteral("g.hex"));
+        QFile f(hexPath);
+        f.open(QIODevice::WriteOnly);
+        f.write(":04000000AABBAABB32\n:04001000AABBAABB22\n:00000001FF\n");
+        f.close();
+        Document d;
+        QString err;
+        CHECK(d.load(hexPath, -1, &err, nullptr) && d.size() == 0x14 && d.hasGaps(), "load HEX with gap");
+        const QByteArray mask0 = d.gapMask(), data0 = d.data();
+        d.setReadOnly(false);
+        QVector<qint64> hits = { 0, 2, 0x10, 0x12 };
+        d.replaceAll(hits, 2, QByteArray(1, char(0xCC)), QStringLiteral("shrink"));
+        CHECK(d.size() == 0x10 && d.isGap(4) && !d.isGap(0), "gap mask follows size change");
+        d.undoStack()->undo();
+        CHECK(d.data() == data0 && d.gapMask() == mask0, "undo restores data and gap mask");
+        d.replace(0, 1, QByteArray(1, char(0x11)), QStringLiteral("ow"));
+        const QString outPath = QDir(tmp.path()).filePath(QStringLiteral("o.bin"));
+        CHECK(d.save(outPath, FileFormat::Binary, &err), "save");
+        CHECK(!d.isChangedByte(0), "no highlight right after save");
+        d.undoStack()->undo();
+        CHECK(d.isChangedByte(0), "undo after save highlights the byte that now differs from disk");
+    }
+
+    // ---- copy-as text helpers
+    {
+        const QByteArray b = QByteArray::fromHex("00FF10A5") + QByteArray(14, char(0x7E));
+        CHECK(toHexText(QByteArray::fromHex("DEADBEEF"), 16) == QLatin1String("DE AD BE EF"), "toHexText");
+        CHECK(toHexText(b, 16).count(QLatin1Char('\n')) == 1 && toHexText(QByteArray(), 16).isEmpty(), "toHexText lines");
+        CHECK(toBinaryText(QByteArray::fromHex("A501")) == QLatin1String("10100101 00000001"), "toBinaryText");
+        CHECK(toCArray(QByteArray::fromHex("0102")) == QLatin1String("const unsigned char data[2] = {\n    0x01, 0x02\n};\n"),
+              "toCArray short");
+        const QString c = toCArray(b);
+        CHECK(c.startsWith(QLatin1String("const unsigned char data[18] = {\n    0x00, 0xFF, 0x10, 0xA5,"))
+                  && c.endsWith(QLatin1String("0x7E,\n    0x7E, 0x7E\n};\n")),
+              "toCArray two lines");
+    }
 
     std::printf("\n%s (%d failure%s)\n", g_fail ? "FAILED" : "ALL PASSED", g_fail, g_fail == 1 ? "" : "s");
     return g_fail ? 1 : 0;

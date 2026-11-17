@@ -52,7 +52,7 @@ build/qbe_tests && QT_QPA_PLATFORM=offscreen build/qbe_view_tests
 
 | 路徑 | 內容 |
 |---|---|
-| `src/` | 原始碼（`core/` 為不依賴 GUI 的格式解析與 CRC） |
+| `src/` | 原始碼（`core/` 為不依賴 GUI 的格式解析、CRC 與搜尋） |
 | `tests/` | 單元測試與範例韌體檔 |
 | `resources/` | 圖示、Logo、翻譯檔、Windows 版本資訊 |
 | `packaging/msix/` | MSIX 範本、圖示資產與打包 / 測試 / 移除腳本 |

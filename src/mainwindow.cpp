@@ -9,6 +9,7 @@
 #include "document.h"
 #include "finddialog.h"
 #include "hexview.h"
+#include "search.h"
 #include "tabpages.h"
 
 #include <QAction>
@@ -76,6 +77,23 @@ QIcon textIcon(const QString &text)
 QString hexStr(quint64 v, int digits = 1)
 {
     return QString::number(v, 16).toUpper().rightJustified(digits, QLatin1Char('0'));
+}
+
+// Same file on disk? Resolves "..", links and, on Windows, letter case.
+bool sameFile(const QString &a, const QString &b)
+{
+    if (a.isEmpty() || b.isEmpty())
+        return false;
+    const QString ca = QFileInfo(a).canonicalFilePath();
+    const QString cb = QFileInfo(b).canonicalFilePath();
+#ifdef Q_OS_WIN
+    const Qt::CaseSensitivity cs = Qt::CaseInsensitive;
+#else
+    const Qt::CaseSensitivity cs = Qt::CaseSensitive;
+#endif
+    if (!ca.isEmpty() && !cb.isEmpty())
+        return ca.compare(cb, cs) == 0;
+    return QFileInfo(a).absoluteFilePath().compare(QFileInfo(b).absoluteFilePath(), cs) == 0;
 }
 
 QString fileFilters()
@@ -719,7 +737,7 @@ bool MainWindow::openFile(const QString &path, int forceFormat)
     if (forceFormat < 0) {
         for (int i = 0; i < m_tabs->count(); ++i) {
             auto *ep = qobject_cast<EditorPage *>(m_tabs->widget(i));
-            if (ep && ep->document()->filePath() == abs) {
+            if (ep && sameFile(ep->document()->filePath(), abs)) {
                 m_tabs->setCurrentIndex(i);
                 return true;
             }
@@ -896,7 +914,21 @@ void MainWindow::updateRecentMenu()
     for (int i = 0; i < list.size(); ++i) {
         const QString f = list.at(i);
         QAction *a = m_recentMenu->addAction(QStringLiteral("&%1  %2").arg((i + 1) % 10).arg(QDir::toNativeSeparators(f)));
-        connect(a, &QAction::triggered, this, [this, f]() { openFile(f); });
+        connect(a, &QAction::triggered, this, [this, f]() {
+            if (!QFileInfo::exists(f)) {
+                const auto ret = QMessageBox::question(this, tr("Recent Files"),
+                                                       tr("%1\n\nThis file no longer exists. Remove it from the list?")
+                                                           .arg(QDir::toNativeSeparators(f)));
+                if (ret == QMessageBox::Yes) {
+                    QStringList recent = AppSettings::settings().value(QStringLiteral("recent")).toStringList();
+                    recent.removeAll(f);
+                    AppSettings::settings().setValue(QStringLiteral("recent"), recent);
+                    updateRecentMenu();
+                }
+                return;
+            }
+            openFile(f);
+        });
     }
     if (list.isEmpty()) {
         m_recentMenu->addAction(tr("(empty)"))->setEnabled(false);
@@ -1137,24 +1169,22 @@ void MainWindow::findNext(bool backward)
         return;
     }
     const bool cs = m_find->caseSensitive();
-    const QByteArray hay = cs ? v->document()->data() : v->document()->data().toLower();
-    if (!cs)
-        pat = pat.toLower();
+    const QByteArray &hay = v->document()->data();      // searched in place, never copied
 
     qint64 pos = -1;
     bool wrapped = false;
     if (!backward) {
         const qint64 from = v->hasSelection() ? v->selectionStart() + 1 : v->cursorPosition();
-        pos = hay.indexOf(pat, from);
+        pos = Search::indexOf(hay, pat, from, cs);
         if (pos < 0 && from > 0) {
-            pos = hay.indexOf(pat, 0);
+            pos = Search::indexOf(hay, pat, 0, cs);
             wrapped = pos >= 0;
         }
     } else {
         const qint64 from = (v->hasSelection() ? v->selectionStart() : v->cursorPosition()) - 1;
-        pos = from >= 0 ? hay.lastIndexOf(pat, from) : -1;
+        pos = from >= 0 ? Search::lastIndexOf(hay, pat, from, cs) : -1;
         if (pos < 0) {
-            pos = hay.lastIndexOf(pat);
+            pos = Search::lastIndexOf(hay, pat, -1, cs);
             wrapped = pos >= 0;
         }
     }
@@ -1184,13 +1214,7 @@ void MainWindow::countMatches()
         m_find->showResult(err, true);
         return;
     }
-    const bool cs = m_find->caseSensitive();
-    const QByteArray hay = cs ? v->document()->data() : v->document()->data().toLower();
-    if (!cs)
-        pat = pat.toLower();
-    qint64 n = 0;
-    for (qint64 p = hay.indexOf(pat, 0); p >= 0; p = hay.indexOf(pat, p + pat.size()))
-        ++n;
+    const qint64 n = Search::count(v->document()->data(), pat, m_find->caseSensitive());
     m_find->showResult(tr("%n match(es).", nullptr, int(qMin<qint64>(n, INT_MAX))));
 }
 
@@ -1239,12 +1263,9 @@ void MainWindow::replaceAll()
         m_find->showResult(err, true);
         return;
     }
-    const bool cs = m_find->caseSensitive();
-    const QByteArray hay = cs ? d->data() : d->data().toLower();
-    const QByteArray needle = cs ? pat : pat.toLower();
-    QVector<qint64> hits;
-    for (qint64 p = hay.indexOf(needle, 0); p >= 0; p = hay.indexOf(needle, p + needle.size()))
-        hits.append(p);
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const QVector<qint64> hits = Search::findAll(d->data(), pat, m_find->caseSensitive());
+    QApplication::restoreOverrideCursor();
     if (hits.isEmpty()) {
         m_find->showResult(tr("Not found."), true);
         return;
@@ -1256,11 +1277,11 @@ void MainWindow::replaceAll()
         if (ret != QMessageBox::Yes)
             return;
     }
-    d->undoStack()->beginMacro(tr("Replace All"));
-    for (int i = hits.size() - 1; i >= 0; --i)
-        d->replace(hits[i], pat.size(), repl, QString());
-    d->undoStack()->endMacro();
-    m_find->showResult(tr("Replaced %n occurrence(s).", nullptr, int(hits.size())));
+    // one undo step and one repaint, however many occurrences
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const int n = d->replaceAll(hits, pat.size(), repl, tr("Replace All"));
+    QApplication::restoreOverrideCursor();
+    m_find->showResult(tr("Replaced %n occurrence(s).", nullptr, n));
 }
 
 void MainWindow::gotoOffset()

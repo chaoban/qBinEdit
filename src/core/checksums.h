@@ -4,6 +4,7 @@
 #include <QByteArray>
 #include <QString>
 #include <QVector>
+#include <atomic>
 
 namespace Checksums {
 
@@ -18,11 +19,31 @@ struct CrcSpec {
     quint32 check;      // CRC of ASCII "123456789" (for self-test)
 };
 
-// Generic table-free bitwise CRC (fast enough for firmware-sized images when
-// combined with the per-spec lookup table built in crcCompute()).
+const QVector<CrcSpec> &crcCatalog();
+
+// Incremental table-driven CRC (slicing-by-8). update() may be called any number of times.
+class Crc
+{
+public:
+    explicit Crc(const CrcSpec &spec);
+    void update(const uchar *data, qint64 len);
+    quint32 value() const;
+
+private:
+    CrcSpec m_spec;
+    int m_shift = 0;        // MSB-first: CRC kept left-aligned in a 32-bit register
+    quint32 m_mask = 0;
+    quint32 m_crc = 0;
+    quint32 m_t[8][256];
+};
+
+// One-shot convenience wrapper around Crc.
 quint32 crcCompute(const CrcSpec &spec, const uchar *data, qint64 len);
 
-const QVector<CrcSpec> &crcCatalog();
+// Reference implementation (bit by bit), used by the self-tests.
+quint32 crcBitwise(const CrcSpec &spec, const uchar *data, qint64 len);
+
+quint32 adler32(const uchar *data, qint64 len);
 
 struct Result {
     QString name;
@@ -30,9 +51,12 @@ struct Result {
     QString note;
 };
 
-// Compute every supported algorithm over [data, data+len).
-QVector<Result> computeAll(const uchar *data, qint64 len);
-
-quint32 adler32(const uchar *data, qint64 len);
+// Compute every supported algorithm over [data, data+len). Large inputs are split over
+// worker threads. 'cancel' and 'progress' are optional and may be used from another
+// thread: progress receives the bytes processed so far (0..len) by the slowest worker.
+// Returns an empty vector when cancelled.
+QVector<Result> computeAll(const uchar *data, qint64 len,
+                           const std::atomic<bool> *cancel = nullptr,
+                           std::atomic<qint64> *progress = nullptr);
 
 } // namespace Checksums

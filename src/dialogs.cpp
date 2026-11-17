@@ -53,41 +53,73 @@ bool parseHexBytes(const QString &text, QByteArray *out)
     return true;
 }
 
+// The text converters below write straight into a pre-sized QString: a 32 MiB selection
+// would otherwise create tens of millions of temporary strings.
+namespace {
+const char16_t kHexDigits[] = u"0123456789ABCDEF";
+}
+
 QString toHexText(const QByteArray &data, int bytesPerLine)
 {
-    QString s;
-    s.reserve(data.size() * 3);
-    for (int i = 0; i < data.size(); ++i) {
-        if (i) {
-            s += (bytesPerLine > 0 && i % bytesPerLine == 0) ? QLatin1Char('\n') : QLatin1Char(' ');
-        }
-        s += QString::number(uchar(data.at(i)), 16).toUpper().rightJustified(2, QLatin1Char('0'));
+    const qsizetype n = data.size();
+    if (n == 0)
+        return QString();
+    QString s(n * 3 - 1, Qt::Uninitialized);
+    QChar *o = s.data();
+    for (qsizetype i = 0; i < n; ++i) {
+        if (i)
+            *o++ = (bytesPerLine > 0 && i % bytesPerLine == 0) ? QLatin1Char('\n') : QLatin1Char(' ');
+        const uchar b = uchar(data.at(i));
+        *o++ = QChar(kHexDigits[b >> 4]);
+        *o++ = QChar(kHexDigits[b & 0xF]);
     }
     return s;
 }
 
 QString toCArray(const QByteArray &data, const QString &name)
 {
-    QString s = QStringLiteral("const unsigned char %1[%2] = {\n").arg(name).arg(data.size());
-    for (int i = 0; i < data.size(); ++i) {
+    const QString head = QStringLiteral("const unsigned char %1[%2] = {\n").arg(name).arg(data.size());
+    const QString tail = QStringLiteral("};\n");
+    const qsizetype n = data.size();
+    // per byte "0xAB," + ' ' or '\n' (6 chars, the last one has no comma) + 4 spaces per line
+    QString s(head.size() + n * 6 + ((n + 15) / 16) * 4 + tail.size(), Qt::Uninitialized);
+    QChar *o = s.data();
+    for (QChar c : head)
+        *o++ = c;
+    for (qsizetype i = 0; i < n; ++i) {
         if (i % 16 == 0)
-            s += QStringLiteral("    ");
-        s += QStringLiteral("0x") + QString::number(uchar(data.at(i)), 16).toUpper().rightJustified(2, QLatin1Char('0'));
-        if (i + 1 < data.size())
-            s += QLatin1Char(',');
-        s += (i % 16 == 15 || i + 1 == data.size()) ? QLatin1Char('\n') : QLatin1Char(' ');
+            for (int k = 0; k < 4; ++k)
+                *o++ = QLatin1Char(' ');
+        const uchar b = uchar(data.at(i));
+        *o++ = QLatin1Char('0');
+        *o++ = QLatin1Char('x');
+        *o++ = QChar(kHexDigits[b >> 4]);
+        *o++ = QChar(kHexDigits[b & 0xF]);
+        if (i + 1 < n)
+            *o++ = QLatin1Char(',');
+        *o++ = (i % 16 == 15 || i + 1 == n) ? QLatin1Char('\n') : QLatin1Char(' ');
     }
-    s += QStringLiteral("};\n");
+    for (QChar c : tail)
+        *o++ = c;
+    s.truncate(o - s.constData());
     return s;
 }
 
 QString toBinaryText(const QByteArray &data)
 {
-    QStringList parts;
-    parts.reserve(data.size());
-    for (char c : data)
-        parts << QString::number(uchar(c), 2).rightJustified(8, QLatin1Char('0'));
-    return parts.join(QLatin1Char(' '));
+    const qsizetype n = data.size();
+    if (n == 0)
+        return QString();
+    QString s(n * 9 - 1, Qt::Uninitialized);
+    QChar *o = s.data();
+    for (qsizetype i = 0; i < n; ++i) {
+        if (i)
+            *o++ = QLatin1Char(' ');
+        const uchar b = uchar(data.at(i));
+        for (int bit = 7; bit >= 0; --bit)
+            *o++ = QLatin1Char((b >> bit) & 1 ? '1' : '0');
+    }
+    return s;
 }
 
 // ============================================================================

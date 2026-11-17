@@ -4,7 +4,7 @@
     Run in an Administrator PowerShell. The kit ships with the Windows SDK.
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File run_wack.ps1 -Msix ..\..\dist\qBinEdit_1.0.0.0_x64.msix
+    powershell -ExecutionPolicy Bypass -File run_wack.ps1 -Msix ..\..\dist\qBinEdit_1.0.1.0_x64.msix
 #>
 [CmdletBinding()]
 param(

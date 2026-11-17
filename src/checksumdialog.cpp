@@ -13,10 +13,24 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QTableWidget>
+#include <QThread>
+#include <QTimer>
 #include <QVBoxLayout>
+
+// Shared between the dialog and its worker thread. The worker keeps its own (implicitly
+// shared) copy of the bytes, so closing the dialog or the file never invalidates them.
+struct ChecksumDialog::Job {
+    QByteArray data;
+    qint64 from = 0;
+    qint64 len = 0;
+    std::atomic<bool> cancel{ false };
+    std::atomic<qint64> progress{ 0 };
+    QVector<Checksums::Result> results;
+};
 
 ChecksumDialog::ChecksumDialog(Document *doc, qint64 selStart, qint64 selLength, QWidget *parent)
     : QDialog(parent), m_doc(doc), m_selStart(selStart), m_selLength(selLength)
@@ -67,6 +81,20 @@ ChecksumDialog::ChecksumDialog(Document *doc, qint64 selStart, qint64 selLength,
     m_table->horizontalHeader()->setStretchLastSection(true);
     m_table->verticalHeader()->setDefaultSectionSize(m_table->fontMetrics().height() + 6);
 
+    m_progress = new QProgressBar(this);
+    m_progress->setRange(0, 1000);
+    m_progress->setTextVisible(false);
+    m_progress->setMaximumHeight(m_progress->fontMetrics().height() / 2 + 4);
+    m_progress->hide();
+    m_progressTimer = new QTimer(this);
+    m_progressTimer->setInterval(100);
+    connect(m_progressTimer, &QTimer::timeout, this, [this]() {
+        if (!m_job || m_job->len <= 0)
+            return;
+        m_progress->setValue(int(m_job->progress.load() * 1000 / m_job->len));
+        m_progress->show();         // only for calculations that take noticeable time
+    });
+
     auto *note = new QLabel(tr("Bytes in address gaps of HEX/S-Record files are included with the fill value 0xFF."), this);
     note->setWordWrap(true);
     note->setVisible(doc->hasGaps());
@@ -85,11 +113,18 @@ ChecksumDialog::ChecksumDialog(Document *doc, qint64 selStart, qint64 selLength,
 
     auto *lay = new QVBoxLayout(this);
     lay->addWidget(range);
+    lay->addWidget(m_progress);
     lay->addWidget(m_table, 1);
     lay->addWidget(note);
     lay->addWidget(buttons);
 
     calculate();
+}
+
+ChecksumDialog::~ChecksumDialog()
+{
+    if (m_job)
+        m_job->cancel = true;       // the worker stops at its next block and cleans up itself
 }
 
 void ChecksumDialog::calculate()
@@ -107,6 +142,12 @@ void ChecksumDialog::calculate()
             || qint64(b) >= size) {
             m_rangeInfo->setText(tr("<span style='color:#d32f2f'>Invalid range. Offsets must be within 0 - %1 (hex).</span>")
                                      .arg(QString::number(qMax<qint64>(0, size - 1), 16).toUpper()));
+            if (m_job) {                // drop a result that would no longer match the range shown
+                m_job->cancel = true;
+                m_job.reset();
+                m_progressTimer->stop();
+                m_progress->hide();
+            }
             return;
         }
         from = qint64(a);
@@ -116,11 +157,35 @@ void ChecksumDialog::calculate()
                              .arg(QString::number(from, 16).toUpper(), QLocale().toString(len),
                                   QString::number(m_doc->baseAddress() + quint64(from), 16).toUpper()));
 
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-    const auto *p = reinterpret_cast<const uchar *>(m_doc->data().constData()) + from;
-    const QVector<Checksums::Result> res = Checksums::computeAll(p, len);
-    QApplication::restoreOverrideCursor();
+    // Run in the background: large images no longer freeze the window, and a new range
+    // simply supersedes a calculation that is still running.
+    if (m_job)
+        m_job->cancel = true;
+    auto job = std::make_shared<Job>();
+    job->data = m_doc->data();
+    job->from = from;
+    job->len = len;
+    m_job = job;
+    QThread *worker = QThread::create([job]() {
+        const auto *p = reinterpret_cast<const uchar *>(job->data.constData()) + job->from;
+        job->results = Checksums::computeAll(p, job->len, &job->cancel, &job->progress);
+    });
+    connect(worker, &QThread::finished, this, [this, job]() {
+        if (job != m_job || job->cancel)
+            return;
+        m_progressTimer->stop();
+        m_progress->hide();
+        showResults(job->results);
+        m_job.reset();
+    });
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    m_progress->setValue(0);
+    m_progressTimer->start();
+    worker->start();
+}
 
+void ChecksumDialog::showResults(const QVector<Checksums::Result> &res)
+{
     QFont mono(QStringLiteral("Consolas"));
     mono.setStyleHint(QFont::Monospace);
     m_table->setRowCount(res.size());

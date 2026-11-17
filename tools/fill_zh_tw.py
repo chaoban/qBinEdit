@@ -321,6 +321,9 @@ T = {
     "Size: %1 bytes": "大小：%1 位元組",
     "Read-only": "唯讀",
     "Edit": "編輯",
+    # 1.0.1
+    "Recent Files": "最近開啟的檔案",
+    "%1\n\nThis file no longer exists. Remove it from the list?": "%1\n\n這個檔案已不存在。要從清單中移除嗎？",
 }
 
 # Context-specific overrides: (context, source) -> translation

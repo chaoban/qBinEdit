@@ -46,9 +46,16 @@
 
 ## 4. Packages（套件）
 
-- 上傳 `dist/qBinEdit_1.0.0.0_x64.msix`（由 `build_msix.ps1` 產生、**不需簽章**，商店會重新簽章）。
+- 上傳 `dist/qBinEdit_1.0.1.0_x64.msix`（由 `build_msix.ps1` 產生、**不需簽章**，商店會重新簽章）。
 - Device family：勾 **Windows 10/11 Desktop**。
 - 之後每次更新：`identity.json` 的 `Version` 往上加（第 4 碼固定為 0，例如 `1.0.1.0`）。
+
+### 送出版本更新（1.0.1 起每次更新）
+1. `identity.json` 的 `Version` 已是 `1.0.1.0`；在 Windows 上重新產生套件：`build_msix.ps1 -AppDir ..\..\dist\qBinEdit` → `dist\qBinEdit_1.0.1.0_x64.msix`。
+2. Partner Center → qBinEdit → 「Product release」區塊右側的 **Start update**（建立新的提交，會以上一版的內容為起點）。
+3. **Packages**：上傳新的 `.msix`。舊的 1.0.0.0 套件可保留或移除；客戶會取得版本號最高的套件。
+4. **Store listings**：中文（台灣）與 English (United States) 各自把「What's new in this version」換成下面第 5、6 節的 1.0.1 文字；其他欄位不用改。
+5. **Submit for certification**，狀態會顯示為 In certification。
 
 ## 5. Store listings — 繁體中文（中文 (台灣) / zh-TW）
 
@@ -80,8 +87,16 @@ qBinEdit 完全在本機運作，不需帳號、不連網、不蒐集任何資�
 
 ### What's new in this version（上限 1,500 字元；第一次上架可留空）
 ```
-1.0.0：第一版。
+1.0.1 效能與穩定性更新
+• 全部取代一次完成、只需一次復原；大量取代從數十秒縮短到瞬間完成
+• 不分大小寫搜尋不再複製整個檔案，大檔搜尋更快、更省記憶體
+• 檢查碼 / CRC 改在背景計算並顯示進度，大檔不再造成視窗沒有回應
+• 插入或刪除位元組後，已修改位元組的紅字標示會保留
+• 「複製為」二進位、十六進位、C 陣列大幅加速
+• 同一個檔案不會因路徑或大小寫不同而重複開啟
+• 最近開啟的檔案若已不存在，可直接從清單移除
 ```
+（1.0.0 送審時填的是「1.0.0：第一版。」）
 
 ### Product features（最多 20 項，每項 ≤ 200 字元，不要自己加項目符號）
 ```
@@ -195,8 +210,16 @@ qBinEdit works entirely offline. No account, no network access, no data collecti
 
 ### What's new in this version
 ```
-1.0.0: First release.
+1.0.1 performance and reliability update
+• Replace All runs in one pass and undoes in one step: large replacements finish instantly instead of taking tens of seconds
+• Case-insensitive search no longer copies the whole file, so it is faster and uses less memory
+• Checksums / CRCs run in the background with a progress bar; large files no longer freeze the window
+• Highlighting of edited bytes now survives inserting or deleting bytes
+• Much faster Copy As binary / hex / C array
+• Opening a file that is already open through another path or letter case switches to its tab
+• Recent Files can remove entries whose file no longer exists
 ```
+(1.0.0 shipped with "1.0.0: First release.")
 
 ### Product features
 ```
